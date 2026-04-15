@@ -1,4 +1,4 @@
-﻿using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations;
 using Umbraco.AI.Core.EditableModels;
 
 namespace Umbraco.AI.OpenAI;
@@ -26,4 +26,10 @@ public class OpenAIProviderSettings
     /// </summary>
     [AIField]
     public string? Endpoint { get; set; } = "https://api.openai.com/v1";
+
+    /// <summary>
+    /// Whether to use the Azure OpenAI endpoint format (deployments-based routing).
+    /// </summary>
+    [AIField]
+    public bool UseAzureEndpoint { get; set; }
 }

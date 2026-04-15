@@ -1,4 +1,5 @@
 using System.ClientModel;
+using Azure.AI.OpenAI;
 using Microsoft.Extensions.Caching.Memory;
 using OpenAI;
 using Umbraco.AI.Core.Providers;
@@ -52,17 +53,26 @@ public class OpenAIProvider : AIProviderBase<OpenAIProviderSettings>
             return cachedModels;
         }
 
-        var client = CreateOpenAIClient(settings).GetOpenAIModelClient();
-        var result = await client.GetModelsAsync(cancellationToken);
+        try
+        {
+            var client = CreateOpenAIClient(settings).GetOpenAIModelClient();
+            var result = await client.GetModelsAsync(cancellationToken);
 
-        var modelIds = result.Value
-            .Select(m => m.Id)
-            .OrderBy(id => id)
-            .ToList();
+            var modelIds = result.Value
+                .Select(m => m.Id)
+                .OrderBy(id => id)
+                .ToList();
 
-        _cache.Set(cacheKey, (IReadOnlyList<string>)modelIds, CacheDuration);
+            _cache.Set(cacheKey, (IReadOnlyList<string>)modelIds, CacheDuration);
 
-        return modelIds;
+            return modelIds;
+        }
+        catch
+        {
+            // Custom endpoints (e.g. proxies) may not support the /models endpoint.
+            // Return an empty list so the UI can fall back to free-text model input.
+            return [];
+        }
     }
 
     /// <summary>
@@ -76,6 +86,11 @@ public class OpenAIProvider : AIProviderBase<OpenAIProviderSettings>
         }
 
         var credential = new ApiKeyCredential(settings.ApiKey);
+
+        if (settings.UseAzureEndpoint && !string.IsNullOrWhiteSpace(settings.Endpoint))
+        {
+            return new AzureOpenAIClient(new Uri(settings.Endpoint), credential);
+        }
 
         return string.IsNullOrWhiteSpace(settings.Endpoint)
             ? new OpenAIClient(credential)
