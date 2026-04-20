@@ -317,13 +317,19 @@ internal sealed class AIPromptService : IAIPromptService
         else if (prompt.OptionCount >= 2)
         {
             var formatInstructions = $$"""
-                IMPORTANT: Return your response as a JSON object with an "options" array containing {{prompt.OptionCount}} options.
-                Each option must have:
-                - "label": A short title (2-5 words)
-                - "value": The actual content
-                - "description": Optional brief explanation
+                IMPORTANT: You MUST return ONLY a JSON object wrapped in a ```json code block.
+                Do NOT include any text before or after the JSON code block.
+                The JSON must have an "options" array with exactly {{prompt.OptionCount}} options.
+                Each option must have "label" (short title, 2-5 words), "value" (the actual content), and "description" (brief explanation).
 
-                Generate exactly {{prompt.OptionCount}} distinct options for the user to choose from.
+                Example format:
+                ```json
+                {
+                  "options": [
+                    { "label": "Option Title", "value": "content here", "description": "why this option" }
+                  ]
+                }
+                ```
                 """;
 
             messages.Add(new ChatMessage(ChatRole.System, formatInstructions));
@@ -405,40 +411,43 @@ internal sealed class AIPromptService : IAIPromptService
 
             case >= 2:
             {
+                // Multi-option prompts use prompt-based JSON formatting instead of structured
+                // output (WithOutputSchema) because some providers (e.g. Azure OpenAI proxies
+                // using the Chat Completions API) do not support response_format with complex
+                // JSON schemas, resulting in empty responses.
+                // Tools are excluded to prevent the model from making tool calls instead of
+                // returning JSON text (structured output normally forces text-only mode, but
+                // since we can't use it here, we must disable tools explicitly).
+                var multiOptionChatOptions = new ChatOptions();
                 var response = await _chatService.GetChatResponseAsync(chat =>
                 {
-                    ConfigureChat(chat);
-                    chat.WithOutputSchema(AIOutputSchema.FromType<MultiOptionResponse>());
+                    chat.WithAlias($"prompt-{prompt.Alias}")
+                        .WithChatOptions(multiOptionChatOptions)
+                        .AsPassThrough();
+                    if (profileId.HasValue)
+                    {
+                        chat.WithProfile(profileId.Value);
+                    }
                 }, messages, cancellationToken);
                 var responseText = response.Text ?? string.Empty;
 
-                if (response.TryGetResult<MultiOptionResponse>(out var parsed) && parsed.Options is { Count: > 0 })
+                // If the response was truncated due to max output tokens, return a clear error
+                // instead of wasting retries on an inherently too-small token budget.
+                if (response.FinishReason == ChatFinishReason.Length)
                 {
                     result = new AIPromptExecutionResult
                     {
-                        Content = responseText,
+                        Content = "❌ The AI response was truncated because the maximum output token limit was reached. " +
+                                  "Increase the 'Max Tokens' setting on the profile used by this prompt to allow for a longer response.",
                         Usage = response.Usage,
                         Messages = messages,
-                        ResultOptions = parsed.Options.Select(option => new AIPromptExecutionResult.AIPromptResultOption
-                        {
-                            Label = option.Label,
-                            DisplayValue = option.Value,
-                            Description = option.Description,
-                            ValueChange = new AIValueChange
-                            {
-                                Path = request.PropertyAlias,
-                                Value = option.Value,
-                                Culture = request.Culture,
-                                Segment = request.Segment
-                            }
-                        }).ToList()
+                        ResultOptions = []
                     };
                 }
                 else
                 {
-                    // Structured output not honored — fall back to retry-based parsing
                     result = await ParseMultipleResultResponseWithRetryAsync(
-                        prompt, messages, chatOptions, responseText,
+                        prompt, messages, multiOptionChatOptions, responseText,
                         response.Usage, request, cancellationToken);
                 }
                 break;
@@ -551,9 +560,27 @@ internal sealed class AIPromptService : IAIPromptService
                 Parse error from previous attempt: {{parseResult.Error}}
                 """;
 
-            // Remove old format instructions and add enhanced ones
-            messages.RemoveAt(0); // Remove old system message
-            messages.Insert(0, new ChatMessage(ChatRole.System, enhancedInstructions));
+            // Replace the last system message (format instructions) with enhanced ones.
+            // We search backwards because the format instructions are appended after
+            // entity context and user content, so they are the last system message.
+            var lastSystemIndex = -1;
+            for (var i = messages.Count - 1; i >= 0; i--)
+            {
+                if (messages[i].Role == ChatRole.System)
+                {
+                    lastSystemIndex = i;
+                    break;
+                }
+            }
+
+            if (lastSystemIndex >= 0)
+            {
+                messages[lastSystemIndex] = new ChatMessage(ChatRole.System, enhancedInstructions);
+            }
+            else
+            {
+                messages.Add(new ChatMessage(ChatRole.System, enhancedInstructions));
+            }
 
             // Retry execution
             var retryResponse = await _chatService.GetChatResponseAsync(chat =>
