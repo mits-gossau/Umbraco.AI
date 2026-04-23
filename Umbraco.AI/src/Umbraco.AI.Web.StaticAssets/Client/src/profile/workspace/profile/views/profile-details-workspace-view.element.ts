@@ -117,6 +117,23 @@ export class UaiProfileDetailsWorkspaceViewElement extends UmbLitElement {
         this.#workspaceContext?.handleCommand(new UaiPartialUpdateCommand<UaiProfileDetailModel>({ model }, "model"));
     }
 
+    #onModelTextInput(event: Event) {
+        event.stopPropagation();
+        const modelId = (event.target as HTMLInputElement).value;
+        if (!modelId) {
+            this.#workspaceContext?.handleCommand(
+                new UaiPartialUpdateCommand<UaiProfileDetailModel>({ model: null }, "model"),
+            );
+            return;
+        }
+
+        // Resolve the providerId from the selected connection
+        const connection = this._connections.find((c) => c.unique === this._model?.connectionId);
+        const providerId = connection?.providerId ?? "";
+        const model: UaiModelRef = { providerId, modelId };
+        this.#workspaceContext?.handleCommand(new UaiPartialUpdateCommand<UaiProfileDetailModel>({ model }, "model"));
+    }
+
     #onTemperatureChange(event: Event) {
         event.stopPropagation();
         const target = event.target as HTMLInputElement;
@@ -406,20 +423,29 @@ export class UaiProfileDetailsWorkspaceViewElement extends UmbLitElement {
                     ></uui-select>
                 </umb-property-layout>
 
-                <umb-property-layout label="Model" description="Select the AI model to use" mandatory>
+                <umb-property-layout label="Model" description="${this._availableModels.length === 0 && !this._loadingModels && this._model.connectionId ? "Enter the model/deployment name" : "Select the AI model to use"}" mandatory>
                     <div slot="editor">
                         ${this._loadingModels ? html`<uui-loader-bar></uui-loader-bar>` : nothing}
-                        <uui-select
-                            name="model" 
-                            .value=${this.#getCurrentModelValue()}
-                            .options=${this.#getModelOptions()}
-                            @change=${this.#onModelChange}
-                            placeholder="Select a model"
-                            ?disabled=${!this._model.connectionId || this._availableModels.length === 0}
-                            required
-                            ${umbBindToValidation(this, "$.model", this._model.model)}
-                            class="${this._loadingModels ? "hidden" : ""}" 
-                        ></uui-select>
+                        ${this._availableModels.length === 0 && !this._loadingModels && this._model.connectionId
+                            ? html`<uui-input
+                                    name="model"
+                                    .value=${this._model.model?.modelId ?? ""}
+                                    @change=${this.#onModelTextInput}
+                                    placeholder="e.g. gpt-4o"
+                                    required
+                                    ${umbBindToValidation(this, "$.model", this._model.model)}
+                                ></uui-input>`
+                            : html`<uui-select
+                                    name="model"
+                                    .value=${this.#getCurrentModelValue()}
+                                    .options=${this.#getModelOptions()}
+                                    @change=${this.#onModelChange}
+                                    placeholder="Select a model"
+                                    ?disabled=${!this._model.connectionId || this._availableModels.length === 0}
+                                    required
+                                    ${umbBindToValidation(this, "$.model", this._model.model)}
+                                    class="${this._loadingModels ? "hidden" : ""}"
+                                ></uui-select>`}
                     </div>
                 </umb-property-layout>
             </uui-box>

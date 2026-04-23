@@ -1,4 +1,4 @@
-﻿using System.Diagnostics.CodeAnalysis;
+using System.Diagnostics.CodeAnalysis;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
 using Umbraco.AI.Core.Models;
@@ -55,9 +55,20 @@ public class OpenAIChatCapability(OpenAIProvider provider) : AIChatCapabilityBas
     /// <inheritdoc />
     [Experimental("OPENAI001")]
     protected override IChatClient CreateClient(OpenAIProviderSettings settings, string? modelId)
-        => OpenAIProvider.CreateOpenAIClient(settings)
-            .GetResponsesClient(modelId ?? DefaultChatModel)
-            .AsIChatClient();
+    {
+        var client = OpenAIProvider.CreateOpenAIClient(settings);
+        var model = modelId ?? DefaultChatModel;
+
+        // Custom endpoints (e.g. Azure OpenAI proxies) typically only support
+        // the Chat Completions API, not the newer Responses API.
+        if (!string.IsNullOrWhiteSpace(settings.Endpoint)
+            && !settings.Endpoint.Equals("https://api.openai.com/v1", StringComparison.OrdinalIgnoreCase))
+        {
+            return client.GetChatClient(model).AsIChatClient();
+        }
+
+        return client.GetResponsesClient(model).AsIChatClient();
+    }
 
     private static bool IsChatModel(string modelId)
         => IncludePatterns.Any(p => p.IsMatch(modelId))
